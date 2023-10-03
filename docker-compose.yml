@@ -1,0 +1,21 @@
+version: '3.7'
+
+services:
+  tools-server:
+    image: reifan49/osu-tools-server
+    build:
+      context: .
+      labels:
+        org.opencontainers.image.authors: 'Rei Hakurei'
+        org.opencontainers.image.description: 'osu-tools communication server'
+        org.opencontainers.image.source: https://github.com/Bloom-Jewel/osu-tools-server
+        org.opencontainers.image.licenses: Apache-2.0
+      tags:
+      - reifan49/osu-tools-server:0.1
+      - ghcr.io/bloom-jewel/osu-tools-server:0.1
+    pull_policy: build
+    restart: unless-stopped
+    ports:
+    - ${PORT:-4050}:5000
+    volumes:
+    - $PWD/tmp:/app/tmp

@@ -1,0 +1,360 @@
+diff --git a/PerformanceCalculator/Program.cs b/PerformanceCalculator/Program.cs
+index a4a50b0..3767101 100644
+--- a/PerformanceCalculator/Program.cs
++++ b/PerformanceCalculator/Program.cs
+@@ -17,6 +17,7 @@ namespace PerformanceCalculator
+ {
+     [Command("dotnet PerformanceCalculator.dll")]
+     [Subcommand(typeof(DifficultyCommand))]
++    [Subcommand(typeof(MetadataCommand))]
+     [Subcommand(typeof(ModsCommand))]
+     [Subcommand(typeof(PerformanceListingCommand))]
+     [Subcommand(typeof(ProfileCommand))]
+diff --git a/PerformanceCalculator/Difficulty/MetadataCommand.cs b/PerformanceCalculator/Difficulty/MetadataCommand.cs
+new file mode 100644
+index 0000000..388e11a
+--- /dev/null
++++ b/PerformanceCalculator/Difficulty/MetadataCommand.cs
+@@ -0,0 +1,342 @@
++using System;
++using System.Collections.Generic;
++using System.ComponentModel.DataAnnotations;
++using System.IO;
++using System.Linq;
++using Alba.CsConsoleFormat;
++using Humanizer;
++using JetBrains.Annotations;
++using McMaster.Extensions.CommandLineUtils;
++using Newtonsoft.Json;
++using osu.Game.Beatmaps;
++using osu.Game.Beatmaps.Timing;
++using osu.Game.Online.API;
++using osu.Game.Rulesets;
++using osu.Game.Rulesets.Difficulty;
++using osu.Game.Rulesets.Mods;
++using osu.Game.Rulesets.Objects;
++using osu.Game.Storyboards;
++
++namespace PerformanceCalculator.Difficulty {
++    [Command(Name = "metadata", Description = "Retrieves basic beatmap data.")]
++    public class MetadataCommand : ProcessorCommand {
++        [UsedImplicitly]
++        [Required]
++        [Argument(0, Name = "path", Description = "Required. A beatmap file (path), beatmap ID, or folder containing files to compute the difficulty for.")]
++        public string Path { get; }
++
++        [UsedImplicitly]
++        [Option(CommandOptionType.SingleOrNoValue, Template = "-r|--ruleset:<ruleset-id>", Description = "Optional. The ruleset to compute the beatmap difficulty for, if it's a convertible beatmap.\n"
++                                                                                                         + "Values: 0 - osu!, 1 - osu!taiko, 2 - osu!catch, 3 - osu!mania")]
++        [AllowedValues("0", "1", "2", "3")]
++        public int? Ruleset { get; }
++
++        [UsedImplicitly]
++        [Option(CommandOptionType.MultipleValue, Template = "-m|--m <mod>", Description = "One for each mod. The mods to compute the difficulty with."
++                                                                                          + "Values: hr, dt, hd, fl, em, 4k, 5k, etc...")]
++        public string[] Mods { get; }
++
++        public override void Execute() {
++            var resultSet = new ResultSet();
++
++            if (Directory.Exists(Path)) {
++                foreach (string file in Directory.GetFiles(Path, "*.osu", SearchOption.AllDirectories)) {
++                    try {
++                        var beatmap = new ProcessorWorkingBeatmap(file);
++                        resultSet.Results.Add(processBeatmap(beatmap));
++                    } catch (Exception e) {
++                        resultSet.Errors.Add($"Processing beatmap \"{file}\" failed:\n{e.Message}");
++                    }
++                }
++            }
++            else
++                resultSet.Results.Add(processBeatmap(ProcessorWorkingBeatmap.FromFileOrId(Path)));
++
++            string json = JsonConvert.SerializeObject(resultSet);
++
++            Console.WriteLine(json);
++
++            if (OutputFile != null)
++                File.WriteAllText(OutputFile, json);
++        }
++
++        private void analyzeBeatmapSplits(IBeatmap beatmap, Mod[] mods, Action<bool, double, double, double, double> iteration) {
++            (double startTime, double endTime) = beatmap.CalculatePlayableBounds();
++            if (endTime - startTime <= 1 || beatmap.ControlPointInfo.TimingPoints.Count <= 0)
++                return;
++
++            int startRate = 1000, endRate = 1000;
++            double stopTime = startTime;
++            if (mods.Any(m => m is ModTimeRamp)) {
++                foreach (var mod in mods.OfType<ModTimeRamp>()) {
++                    startRate = (int)Math.Round(mod.InitialRate.Value * 1000);
++                    endRate   = (int)Math.Round(  mod.FinalRate.Value * 1000);
++                    stopTime  = startTime + (endTime - startTime) * 0.75;
++                }
++            } else if (mods.Any(m => m is ModRateAdjust)) {
++                foreach (var mod in mods.OfType<ModRateAdjust>())
++                    startRate = endRate = (int)Math.Round(mod.SpeedChange.Value * 1000);
++            }
++
++            if (stopTime > startTime) {
++                int lowRate  = Math.Min(startRate, endRate),
++                    highRate = Math.Max(startRate, endRate);
++                int seekRate, sign;
++                bool isUpward, isFirst;
++                isUpward = endRate >= startRate;
++                isFirst = true;
++                sign = isUpward ? 1 : -1;
++                for (
++                    seekRate  = startRate - 5 * sign;
++                    isUpward ? (seekRate <= endRate) : (seekRate >= endRate);
++                    seekRate += 10 * sign,
++                    isFirst = false
++                ) {
++                    int clampSeekRate     = Math.Clamp(seekRate + 5 * sign, lowRate, highRate);
++                    double actualSeekRate = clampSeekRate / 1000.0;
++                    double thisProgress   = Math.Clamp((double)(sign * (seekRate - startRate              ) ) / Math.Max(1, sign * (endRate - startRate)), 0, 1);
++                    double nextProgress   = Math.Clamp((double)(sign * (seekRate - startRate + (10 * sign)) ) / Math.Max(1, sign * (endRate - startRate)), 0, 1);
++                    double seekStartTime  = nextProgress > 0 ? (startTime + (stopTime - startTime) * thisProgress) : startTime;
++                    double seekEndTime    = nextProgress < 1 ? (startTime + (stopTime - startTime) * nextProgress) : endTime;
++
++                    iteration(isFirst, seekStartTime, seekEndTime, actualSeekRate, (seekEndTime - seekStartTime) / actualSeekRate);
++                }
++            } else {
++                iteration(true, startTime, endTime, endRate, (endTime - startTime) / endRate);
++            }
++        }
++
++        private TempoStat analyzeBeatmapTempo(WorkingBeatmap working, IBeatmap beatmap, Mod[] mods) {
++            bool canAnalyze   = false;
++            var timingScope   = new SortedDictionary<double, (double Tempo, int Count, double Length, double Fluence)>();
++
++            var stat = new TempoStat {
++                Common = Math.Round(60000 / beatmap.GetMostCommonBeatLength(), 6),
++                RawMin = Math.Round(beatmap.ControlPointInfo.BPMMinimum, 6),
++                RawMax = Math.Round(beatmap.ControlPointInfo.BPMMaximum, 6),
++            };
++
++            analyzeBeatmapSplits(beatmap, mods, delegate(bool isFirst, double startTime, double endTime, double rate, double warpedDuration) {
++                if (!canAnalyze) canAnalyze = true;
++                if (isFirst) timingScope.Clear();
++
++                var splitStartTiming = beatmap.ControlPointInfo.TimingPointAt(startTime);
++                var timingChanges = new SortedSet<double>();
++                if (!timingScope.ContainsKey(startTime)) {
++                    timingScope.TryAdd(startTime, (60000 / splitStartTiming.BeatLength * rate, 0, 0, 0));
++                    timingChanges.Add(startTime);
++                }
++                var affectedTimings = beatmap.ControlPointInfo.TimingPoints.Where(t => t.Time > startTime && t.Time < endTime).ToList();
++                affectedTimings.Where(t => !timingScope.ContainsKey(t.Time)).ToList()
++                    .ForEach(t => { timingScope.TryAdd(t.Time, (60000 / t.BeatLength * rate, 0, 0, 0)); timingChanges.Add(t.Time); });
++                timingChanges.Add(endTime);
++
++                timingChanges.SkipLast(1).Zip(timingChanges.Skip(1)).ToList().ForEach(((double Start, double End) pair) => {
++                    double totalBreaks      = beatmap.Breaks
++                                                  .Where(b => (b.Duration / rate) >= BreakPeriod.MIN_BREAK_DURATION)
++                                                  .Where(b => b.StartTime < pair.End && b.EndTime >= pair.Start)
++                                                  .Sum(b => Math.Max(b.EndTime, pair.Start) - Math.Min(b.StartTime, pair.End));
++
++                    var value     = timingScope[pair.Start];
++                    value.Tempo   = Math.Round(value.Tempo, 6);
++                    value.Count   = beatmap.HitObjects.Count(obj => obj.StartTime < pair.End && obj.GetEndTime() >= pair.Start);
++                    value.Length  = (pair.End - pair.Start - totalBreaks) / rate;
++
++                    double objectFluence    = Math.Clamp(Math.Log(2 + value.Count * 23, 50), 0, 2);
++                    double durationFluence  = Math.Max(Math.Log(1 + value.Length * 0.8, 200), 0);
++                    value.Fluence = objectFluence * durationFluence;
++
++                    timingScope[pair.Start] = value;
++                });
++            });
++            if (canAnalyze) {
++                stat.RawMin = timingScope.Values.Min(tp => tp.Tempo);
++                stat.RawMax = timingScope.Values.Max(tp => tp.Tempo);
++
++                var redactedTiming = timingScope.Where(p => p.Value.Fluence >= 0.5).ToDictionary(p => p.Key, p => p.Value);
++                stat.Min    = redactedTiming.Values.Min(tp => tp.Tempo);
++                stat.Max    = redactedTiming.Values.Max(tp => tp.Tempo);
++                stat.Common = redactedTiming.Select(p => (Tempo: p.Value.Tempo, Length: p.Value.Length))
++                                .GroupBy(t => t.Tempo)
++                                .Select(p => (Tempo: p.Key, TotalLength: p.Sum(t => t.Length)))
++                                .MaxBy(t => t.TotalLength).Tempo;
++            } else {
++                stat.Min = stat.RawMin.Value;
++                stat.Max = stat.RawMax.Value;
++            }
++
++            return stat;
++        }
++        private DurationStat analyzeBeatmapDuration(WorkingBeatmap working, IBeatmap beatmap, Mod[] mods) {
++            bool canAnalyze   = false;
++            var timingScope   = new SortedDictionary<double, (double rate, double ActiveLength, double BreakLength, double TotalLength)>();
++
++            var stat = new DurationStat {
++                Active = (beatmap.CalculatePlayableLength() - beatmap.TotalBreakTime) / 1000,
++                Total  = beatmap.CalculatePlayableLength() / 1000,
++            };
++
++            (double startTime, double endTime) = beatmap.CalculatePlayableBounds();
++            double startOffset = 0;
++            double endOffset = 0;
++
++            analyzeBeatmapSplits(beatmap, mods, delegate(bool isFirst, double startTime, double endTime, double rate, double warpedDuration) {
++                if (!canAnalyze) canAnalyze = true;
++                if (isFirst) timingScope.Clear();
++
++                double breakLength = beatmap.Breaks
++                                         .Where(b => (b.Duration / rate) >= BreakPeriod.MIN_BREAK_DURATION)
++                                         .Where(b => b.StartTime < endTime && b.EndTime >= startTime)
++                                         .Sum(b => Math.Max(b.EndTime, startTime) - Math.Min(b.StartTime, endTime));
++                double warpedBreak  = breakLength / rate;
++                double warpedActive = warpedDuration - warpedBreak;
++                timingScope.Add(startTime, (rate, warpedActive, warpedBreak, warpedDuration));
++            });
++
++            if (working.Storyboard.LatestEventTime != null) {
++                if (working.Storyboard.LatestEventTime > endTime + 2000)
++                    endOffset = Math.Clamp(working.Storyboard.LatestEventTime.Value - endTime, 0, 60000);
++            }
++
++            if (working.BeatmapInfo.AudioLeadIn > 0)
++                startOffset = Math.Min(startOffset, -(startTime + Math.Min(working.BeatmapInfo.AudioLeadIn, 5000)));
++
++            if (working.Storyboard.EarliestEventTime != null)
++                startOffset = Math.Min(startOffset, -(startTime + Math.Clamp(working.Storyboard.EarliestEventTime.Value, 0, 60000)));
++
++            if (canAnalyze) {
++                startOffset = startOffset / timingScope.Values.First().rate;
++                stat.Total  = timingScope.Values.Sum(t => t.TotalLength);
++                endTime     = startTime + stat.Total;
++                stat.Active = (stat.Total - timingScope.Values.Sum(t => t.BreakLength)) / 1000;
++                stat.Total  = stat.Total / 1000;
++            }
++
++            stat.Full = ((endTime + endOffset) - (startTime + startOffset)) / 1000;
++
++            return stat;
++        }
++
++        private Result processBeatmap(WorkingBeatmap beatmap) {
++            // Get the ruleset
++            int rulesetID = Ruleset.GetValueOrDefault();
++            if (beatmap.BeatmapInfo.Ruleset.OnlineID > 0 || Ruleset == null)
++                rulesetID = beatmap.BeatmapInfo.Ruleset.OnlineID;
++
++            var ruleset = LegacyHelper.GetRulesetFromLegacyID(rulesetID);
++            var mods = getMods(ruleset);
++            var beatmapAfter = beatmap.GetPlayableBeatmap(ruleset.RulesetInfo, mods);
++            var attributes = ruleset.CreateDifficultyCalculator(beatmap).Calculate(mods);
++
++            return new Result {
++                RulesetId = ruleset.RulesetInfo.OnlineID,
++                BeatmapId = beatmap.BeatmapInfo.OnlineID,
++                Beatmap = beatmap.BeatmapInfo.ToString(),
++                Mods = mods.Select(m => new APIMod(m)).ToList(),
++                Difficulty = new DifficultyStat {
++                    HP   = beatmapAfter.Difficulty.DrainRate,
++                    CS   = beatmapAfter.Difficulty.CircleSize,
++                    OD   = beatmapAfter.Difficulty.OverallDifficulty,
++                    AR   = beatmapAfter.Difficulty.ApproachRate,
++                    Star = attributes.StarRating,
++                },
++                Tempo = analyzeBeatmapTempo(beatmap, beatmapAfter, mods),
++                Duration = analyzeBeatmapDuration(beatmap, beatmapAfter, mods),
++            };
++        }
++        private Mod[] getMods(Ruleset ruleset) {
++            var mods = new List<Mod>();
++            if (Mods == null)
++                return Array.Empty<Mod>();
++
++            var availableMods = ruleset.CreateAllMods().ToList();
++
++            foreach (var modString in Mods) {
++                Mod newMod = availableMods.FirstOrDefault(m => string.Equals(m.Acronym, modString, StringComparison.CurrentCultureIgnoreCase));
++                if (newMod == null)
++                    throw new ArgumentException($"Invalid mod provided: {modString}");
++
++                mods.Add(newMod);
++            }
++
++            return mods.ToArray();
++        }
++
++        private class ResultSet {
++            [JsonProperty("errors")]
++            public List<string> Errors { get; set; } = new List<string>();
++
++            [JsonProperty("results")]
++            public List<Result> Results { get; set; } = new List<Result>();
++        }
++
++        private class DifficultyStat {
++            [JsonProperty("hp")]
++            public float HP { get; set; }
++
++            [JsonProperty("cs")]
++            public float CS { get; set; }
++
++            [JsonProperty("od")]
++            public float OD { get; set; }
++
++            [JsonProperty("ar")]
++            public float AR { get; set; }
++
++            [JsonProperty("star")]
++            public double Star { get; set; }
++        }
++
++        [JsonObject(ItemNullValueHandling = NullValueHandling.Ignore)]
++        private class TempoStat {
++            [JsonProperty("common")]
++            public double Common { get; set; }
++
++            [JsonProperty("low")]
++            public double Min { get; set; }
++
++            [JsonProperty("high")]
++            public double Max { get; set; }
++
++            [JsonProperty("actual_low")]
++            public double? RawMin { get; set; }
++
++            [JsonProperty("actual_high")]
++            public double? RawMax { get; set; }
++        }
++
++        private class DurationStat {
++            [JsonProperty("active")]
++            public double Active { get; set; }
++
++            [JsonProperty("total")]
++            public double Total { get; set; }
++
++            [JsonProperty("maximum")]
++            public double Full { get; set; }
++        }
++
++        private class Result {
++            [JsonProperty("ruleset_id")]
++            public int RulesetId { get; set; }
++
++            [JsonProperty("beatmap_id")]
++            public int BeatmapId { get; set; }
++
++            [JsonProperty("beatmap")]
++            public string Beatmap { get; set; }
++
++            [JsonProperty("mods")]
++            public List<APIMod> Mods { get; set; }
++
++            [JsonProperty("difficulty")]
++            public DifficultyStat Difficulty { get; set; }
++
++            [JsonProperty("tempo")]
++            public TempoStat Tempo { get; set; }
++
++            [JsonProperty("duration")]
++            public DurationStat Duration { get; set; }
++        }
++    }
++}

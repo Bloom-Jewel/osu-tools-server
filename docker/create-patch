@@ -1,0 +1,35 @@
+#!/bin/bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REPO_TOP=$(git rev-parse --show-superproject-working-tree)
+PATCH_NAME=$(date +'%s%N')
+
+process_submodule() {
+  REPO_KEY=$1
+  [[ "$#" -ge 2 ]] && REPO_DIR=$2 || REPO_DIR=$1
+  PATCHES_BASE=${REPO_TOP}/patches
+  PATCHES_DIR=${PATCHES_BASE}/${REPO_KEY}
+
+  SKIP_FLAG=
+  git -C ${REPO_DIR} diff --quiet && SKIP_FLAG="${SKIP_FLAG}1" || SKIP_FLAG="${SKIP_FLAG}0"
+  [[ -z $(git -C ${REPO_DIR} ls-files --others --exclude-standard -z ) ]] && \
+    SKIP_FLAG="${SKIP_FLAG}1" || SKIP_FLAG="${SKIP_FLAG}0"
+  [[ $SKIP_FLAG == '11' ]] && return 1
+
+  (
+    git -C ${REPO_DIR} diff HEAD;
+    git -C ${REPO_DIR} ls-files --others --exclude-standard -z | \
+      xargs -0 -n 1 git -C ${REPO_DIR} --no-pager diff /dev/null;
+  ) > ${PATCHES_DIR}/${PATCH_NAME}.patch
+  echo "created ${PATCHES_DIR}/${PATCH_NAME}.patch" >&2
+  git -C ${REPO_DIR} clean -fdx
+  git -C ${REPO_DIR} reset --hard
+}
+
+if [[ -z $REPO_TOP ]]; then
+  REPO_TOP=${REPO_ROOT}
+  for repo in $(git submodule foreach --quiet 'echo $path'); do
+    process_submodule $repo
+  done
+else
+  process_submodule $(basename ${REPO_ROOT}) ${REPO_ROOT}
+fi

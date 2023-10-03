@@ -1,0 +1,26 @@
+#!/bin/sh
+
+PATCHER_DIR=$PWD/.patches
+
+if [ ! -d "${PATCHER_DIR}" ]; then
+  if [ -d "$PWD/patches" ]; then
+    PATCHER_DIR=$PWD/patches
+  fi
+fi
+
+if [ -d "${PATCHER_DIR}" ]; then
+  set -e
+  echo 'Performing patch to submodules.' >&2
+  for repo in osu tools; do
+    [ ! -d ${PATCHER_DIR}/$repo ] && continue;
+    [ -d $PWD/$repo/.git ] && git config -f $PWD/$repo/.git/config --unset core.worktree
+    [ -z $(ls -1 ${PATCHER_DIR}/$repo | grep -E '[.]patch$') ] && continue;
+
+    git -C $PWD/$repo apply \
+      ${PATCHER_DIR}/$repo/*.patch --stat
+    git -C $PWD/$repo apply \
+      --whitespace=fix -v --apply --inaccurate-eof --unidiff-zero --index -p1 \
+      ${PATCHER_DIR}/$repo/*.patch
+    rm ${PATCHER_DIR}/$repo/*.patch
+  done;
+fi
