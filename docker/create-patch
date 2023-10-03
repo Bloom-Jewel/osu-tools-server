@@ -10,16 +10,24 @@ process_submodule() {
   PATCHES_DIR=${PATCHES_BASE}/${REPO_KEY}
 
   SKIP_FLAG=
-  git -C ${REPO_DIR} diff --quiet && SKIP_FLAG="${SKIP_FLAG}1" || SKIP_FLAG="${SKIP_FLAG}0"
+  git -C ${REPO_DIR} diff --quiet HEAD && SKIP_FLAG="${SKIP_FLAG}1" || SKIP_FLAG="${SKIP_FLAG}0"
+  git -C ${REPO_DIR} diff --staged --quiet && SKIP_FLAG="${SKIP_FLAG}1" || SKIP_FLAG="${SKIP_FLAG}0"
   [[ -z $(git -C ${REPO_DIR} ls-files --others --exclude-standard -z ) ]] && \
     SKIP_FLAG="${SKIP_FLAG}1" || SKIP_FLAG="${SKIP_FLAG}0"
   [[ $SKIP_FLAG == '11' ]] && return 1
 
   (
-    git -C ${REPO_DIR} diff HEAD;
-    git -C ${REPO_DIR} ls-files --others --exclude-standard -z | \
-      xargs -0 -n 1 git -C ${REPO_DIR} --no-pager diff /dev/null;
+    echo $SKIP_FLAG >&2
+    [[ ${SKIP_FLAG:0:1} == '0' ]] && \
+      git -C ${REPO_DIR} diff HEAD;
+    [[ ${SKIP_FLAG:1:1} == '0' ]] && \
+      git -C ${REPO_DIR} diff --staged;
+    [[ ${SKIP_FLAG:2:1} == '0' ]] && \
+      git -C ${REPO_DIR} ls-files --others --exclude-standard -z | \
+        xargs -0 -n 1 git -C ${REPO_DIR} --no-pager diff /dev/null;
   ) > ${PATCHES_DIR}/${PATCH_NAME}.patch
+  [[ ! -s ${PATCHES_DIR}/${PATCH_NAME}.patch ]] && \
+    rm ${PATCHES_DIR}/${PATCH_NAME}.patch && return 1
   echo "created ${PATCHES_DIR}/${PATCH_NAME}.patch" >&2
   git -C ${REPO_DIR} clean -fdx
   git -C ${REPO_DIR} reset --hard

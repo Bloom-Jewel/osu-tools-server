@@ -19,7 +19,7 @@ if [ -d "${PATCHER_DIR}" ]; then
     git -C $PWD/$repo apply \
       ${PATCHER_DIR}/$repo/*.patch --stat
     git -C $PWD/$repo apply \
-      --whitespace=fix -v --apply --inaccurate-eof --unidiff-zero --index -p1 \
+      -v --apply --whitespace=fix --unidiff-zero --index -p1 \
       ${PATCHER_DIR}/$repo/*.patch
     rm ${PATCHER_DIR}/$repo/*.patch
   done;
