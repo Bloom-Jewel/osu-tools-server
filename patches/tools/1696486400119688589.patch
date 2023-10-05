@@ -1,18 +1,6 @@
-diff --git a/PerformanceCalculator/Program.cs b/PerformanceCalculator/Program.cs
-index a4a50b0..3767101 100644
---- a/PerformanceCalculator/Program.cs
-+++ b/PerformanceCalculator/Program.cs
-@@ -17,6 +17,7 @@ namespace PerformanceCalculator
- {
-     [Command("dotnet PerformanceCalculator.dll")]
-     [Subcommand(typeof(DifficultyCommand))]
-+    [Subcommand(typeof(MetadataCommand))]
-     [Subcommand(typeof(ModsCommand))]
-     [Subcommand(typeof(PerformanceListingCommand))]
-     [Subcommand(typeof(ProfileCommand))]
 diff --git a/PerformanceCalculator/Difficulty/MetadataCommand.cs b/PerformanceCalculator/Difficulty/MetadataCommand.cs
 new file mode 100644
-index 0000000..388e11a
+index 0000000..5edb8ee
 --- /dev/null
 +++ b/PerformanceCalculator/Difficulty/MetadataCommand.cs
 @@ -0,0 +1,342 @@
@@ -120,7 +108,7 @@ index 0000000..388e11a
 +                    iteration(isFirst, seekStartTime, seekEndTime, actualSeekRate, (seekEndTime - seekStartTime) / actualSeekRate);
 +                }
 +            } else {
-+                iteration(true, startTime, endTime, endRate, (endTime - startTime) / endRate);
++                iteration(true, startTime, endTime, endRate / 1000.0, 1000.0 * (endTime - startTime) / endRate);
 +            }
 +        }
 +
@@ -358,3 +346,15 @@ index 0000000..388e11a
 +        }
 +    }
 +}
+diff --git a/PerformanceCalculator/Program.cs b/PerformanceCalculator/Program.cs
+index a4a50b0..3767101 100644
+--- a/PerformanceCalculator/Program.cs
++++ b/PerformanceCalculator/Program.cs
+@@ -17,6 +17,7 @@ namespace PerformanceCalculator
+ {
+     [Command("dotnet PerformanceCalculator.dll")]
+     [Subcommand(typeof(DifficultyCommand))]
++    [Subcommand(typeof(MetadataCommand))]
+     [Subcommand(typeof(ModsCommand))]
+     [Subcommand(typeof(PerformanceListingCommand))]
+     [Subcommand(typeof(ProfileCommand))]
