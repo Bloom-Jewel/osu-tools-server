@@ -15,7 +15,7 @@ COPY docker/delta-patcher[s] .
 RUN \
   ( \
     [ ! -f delta-patchers ] && echo 'Skipping Delta Patcher' >&2 \
-  ) || ./delta-patchers
+  ) || DOCKER_BUILD=1 ./delta-patchers
 RUN \
   # Update dotnet project package references if needed.
   grep -qvF '"..\osu' tools/osu.Tools.sln || ( \

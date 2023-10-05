@@ -15,11 +15,16 @@ if [ -d "${PATCHER_DIR}" ]; then
     [ ! -d ${PATCHER_DIR}/$repo ] && continue;
     [ -d $PWD/$repo/.git ] && git config -f $PWD/$repo/.git/config --unset core.worktree
     [ -z $(ls -1 ${PATCHER_DIR}/$repo | grep -E '[.]patch$') ] && continue;
+    [ -n ${DOCKER_BUILD} ] && (
+      git -C $PWD/$repo reset --hard;
+      git -C $PWD/$repo clean -fdx
+    )
 
     git -C $PWD/$repo apply \
       ${PATCHER_DIR}/$repo/*.patch --stat
     git -C $PWD/$repo apply \
-      -v --apply --whitespace=fix --unidiff-zero --index -p1 \
+      -v --apply --whitespace=fix \
+      --unidiff-zero --index -p1 \
       ${PATCHER_DIR}/$repo/*.patch
     rm ${PATCHER_DIR}/$repo/*.patch
   done;
