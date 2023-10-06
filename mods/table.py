@@ -1,6 +1,7 @@
 __all__ = []
 
 def _wrapper_(g):
+  import os
   import re
   import functools
   import itertools
@@ -18,6 +19,8 @@ def _wrapper_(g):
   PREFERRED = parse_mod_string('NF EM TD HD HR SD DT RL HT NC FL AP SO ATP PF 4K 5K 6K 7K 8K SUD RAN CIN TRG 9K DP 1K 3K 2K V2 MIR')
   COMMUNITY = parse_mod_string('NF r:ZE TD HD HR SD DT r:XR HT NC FL AT SO AP PF 4K 5K 6K 7K 8K FI RD CIN TG 9K DS 1K 3K 2K V2 MR')
   CLASSIC   = [1 << i for i in range(31)]
+  if 'STAT_SERVER_CUSTOM_MODS' in os.environ:
+    CUSTOM    = parse_mod_string(os.environ.get('STAT_SERVER_CUSTOM_MODS'))
 
   MODERN_ADDITIONS = [
     ('HST', 'WU'),
@@ -36,6 +39,9 @@ def _wrapper_(g):
     'community': (list, True),
     'classic':   (int, False),
   }
+  if 'STAT_SERVER_CUSTOM_MODS' in os.environ:
+    PARSER_TYPE['custom'] = (list, True)
+
   loc = locals()
   PARSER = dict((k, loc[k.upper()]) for k in PARSER_TYPE)
   del loc
@@ -90,8 +96,16 @@ def _wrapper_(g):
 
     return value_to
 
+  # allow moving actual PREFERRED table into other table if needed
+  if 'STAT_SERVER_PREFERRED' in os.environ and \
+     os.environ['STAT_SERVER_PREFERRED'] in PARSER_TYPE and \
+     PARSER_TYPE[os.environ['STAT_SERVER_PREFERRED']][0] == list:
+    PARSER['preferred'] = PARSER.get(os.environ['STAT_SERVER_PREFERRED'])
+
   for key_from, key_to in itertools.permutations(PARSER_TYPE, 2):
     k = f'convert_{key_from}_to_{key_to}'
+    if k in g:
+      continue
     g[k] = functools.partial(generic_parser, key_from, key_to)
     __all__.append(k)
 
