@@ -8,6 +8,8 @@ import traceback
 from flask import Flask, request as req
 import requests
 
+import mods
+
 OSU_MODE_NAMES = ['osu', 'taiko', 'fruits', 'mania']
 
 app = Flask(__name__)
@@ -87,10 +89,20 @@ def fetch_difficulty_generic(mode_id: int):
     else:
       data_choice[1] = data['map_id']
 
+  query_mods = []
+  mod_names, mod_flags = mods.in_request()
+  if mod_names is not None:
+    query_mods[:] = mods.convert_preferred_to_community(mod_names)
+  elif mod_flags is not None:
+    query_mods[:] = mods.convert_classic_to_community(mod_flags)
+
   with downloaded_file(data_choice[0]) as dl:
-    cmd = ['dotnet', 'PerformanceCalculator.dll', 'difficulty', '-j']
-    cmd.append('--no-classic')
+    cmd = ['dotnet', 'PerformanceCalculator.dll', 'metadata', '-j']
+    # cmd.append('--no-classic')
     cmd.append(f"-r:{mode_id}")
+    for mod in query_mods:
+      cmd.extend(['-m', mod])
+
     if dl:
       cmd.append(os.path.join(os.getcwd(), dl.path))
     else:
@@ -115,8 +127,24 @@ def fetch_difficulty_generic(mode_id: int):
   map_stat_rating = {}
   if raw_stat is not None and mode_id == raw_stat['ruleset_id']:
     map_stat_rating["map_id"] = raw_stat['beatmap_id']
-    map_stat_rating['mods_raw'] = raw_stat['mods']
-    map_stat_rating['difficulty_star'] = raw_stat['attributes']['star_rating']
+    response_mods = [raw_mod['acronym'] for raw_mod in raw_stat['mods']]
+    response_replace = dict(zip(
+      response_mods,
+      mods.convert_community_to_preferred(response_mods)
+    ))
+    map_stat_rating['mods'] = {
+      'classicFlags': mods.convert_community_to_classic(response_mods),
+      'raw': dict(
+        (
+          response_replace[raw_mod['acronym']],
+          raw_mod.get('settings', {})
+        )
+        for raw_mod in raw_stat['mods']
+      ),
+    }
+    map_stat_rating['difficulty'] = raw_stat['difficulty']
+    map_stat_rating['bpm'] = raw_stat['tempo']
+    map_stat_rating['duration'] = raw_stat['duration']
 
   if map_stat_rating:
     return {"data": map_stat_rating}

@@ -1,0 +1,210 @@
+openapi: "3.0.3"
+info:
+  title: "osu-tools Server"
+  description: |
+    A simple server to communicate against osu-tools in a most programmable way.
+  version: '0.1'
+  license:
+    name: 'Apache 2.0'
+    url: 'http://www.apache.org/licenses/LICENSE-2.0.html'
+
+servers:
+- url: '{server}'
+  description: analysis server
+  variables:
+    server:
+      default: https://luminance-ritual.bloom-juery.net/
+
+components:
+  schemas:
+    defaultErrorSchema:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            type:
+              type: string
+              description: 'type of error'
+            message:
+              type: string
+              description: 'summary of error'
+    modeClassicIds:
+      description: 'represents osu! game mode in integer'
+      type: integer
+      enum: [0, 1, 2, 3]
+    modeClassicNames:
+      description: 'represents osu! game mode in string'
+      type: string
+      enum: [osu, taiko, fruits, mania]
+    gameModifiersFlags:
+      type: array
+      items:
+        type: integer
+        enum: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, 268435456, 536870912, 1073741824]
+    gameModifiersStrings:
+      oneOf:
+      - type: array
+        items:
+          type: string
+        description: one modifier per entry.
+      - type: string
+        description: space delimited modifiers
+    gameModifiersInternalSpec:
+      type: object
+      required:
+      - acronym
+      properties:
+        acronym:
+          type: string
+      additionalProperties: {}
+    gameModifiersSpec:
+      oneOf:
+      - $ref: '#/components/schemas/gameModifiersFlags'
+      - $ref: '#/components/schemas/gameModifiersStrings'
+    mapStatSchema:
+      allOf:
+      - type: object
+        description: |
+          original spec
+        properties:
+          map_id:
+            type: integer
+            description: denotes beatmap ID
+            x-author-note: '`map_id` is shorter and used internally'
+          mods:
+            type: object
+            properties:
+              classicFlags:
+                type: integer
+              rawData:
+                type: array
+                items:
+                  $ref: '#/components/schemas/gameModifiersInternalSpec'
+      - type: object
+        description: |
+          additional definition based on time-split analyzer on MetadataCommand.cs patch.
+        properties:
+          difficulty:
+            type: object
+            properties:
+              hp:   {type: number}
+              cs:   {type: number}
+              od:   {type: number}
+              ar:   {type: number}
+              star: {type: number}
+          bpm:
+            type: object
+            description: |
+              dictates normalized bpm data of a beatmap, including raw without filters
+            properties:
+              common:  {type: number}
+              low:     {type: number}
+              high:    {type: number}
+              rawLow:  {type: number}
+              rawHigh: {type: number}
+          duration:
+            type: object
+            description: |
+              dictates actual active time, total sitting time, and total possible time of a single map.
+            properties:
+              active:  {type: number}
+              total:   {type: number}
+              maximum: {type: number}
+
+tags:
+- name: analysis
+
+paths:
+  /stat/{mode}:
+    post:
+      tags:
+      - analysis
+      summary: 'query to osu-tools server to perform analysis'
+      parameters:
+      - name: mode
+        in: path
+        schema:
+          oneOf:
+          - $ref: '#/components/schemas/modeClassicIds'
+          - $ref: '#/components/schemas/modeClassicNames'
+        required: true
+      requestBody:
+        content:
+          application/json:
+            schema:
+              allOf:
+              - oneOf:
+                - type: object
+                  required:
+                  - url
+                  properties:
+                    url:
+                      type: string
+                - type: object
+                  required:
+                  - map_id
+                  properties:
+                    map_id:
+                      type: integer
+              - type: object
+                properties:
+                  mods:
+                    $ref: '#/components/schemas/gameModifiersSpec'
+            examples:
+              useMapId:
+                summary: 'with map_id'
+                value:
+                  map_id: 2666644
+              useUrl:
+                summary: 'with url'
+                value:
+                  url: 'https://osu.ppy.sh/osu/2666644'
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+              - content
+              properties:
+                content:
+                  type: string
+                  format: binary
+                  description: 'file content to analyze'
+                mods:
+                  $ref: '#/components/schemas/gameModifiersSpec'
+      responses:
+        200:
+          description: 'success response'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mapStatSchema'
+              example:
+                map_id: 3234625
+                mods:
+                  classicFlags: 0
+                  raw:
+                  - acronym: HST
+                difficulty:
+                  hp: 5.5
+                  cs: 5.5
+                  od: 5.5
+                  ar: 5.5
+                  star: 4.276210426851932
+                bpm:
+                  common: 121.2
+                  low: 100.5
+                  high: 172.8
+                  actual_low: 96.48
+                  actual_high: 4294967296
+                duration:
+                  active: 85.52331729138322
+                  total: 85.52331729138322
+                  maximum: 85.52331729138322
+                  
+        default:
+          description: 'failed response'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/defaultErrorSchema'

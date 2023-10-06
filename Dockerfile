@@ -71,6 +71,7 @@ EXPOSE 5000
 VOLUME /app/tmp
 # ENV PYTHON_VERSION ${PYTHON_VERSION}
 COPY --chown=1000 *.py .
+COPY --chown=1000 mods mods
 COPY --chown=1000 docker/entrypoint.sh .
 
 COPY --chown=1000 --from=build /src/bin osu
