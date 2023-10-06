@@ -77,17 +77,22 @@ def fetch_difficulty_generic(mode_id: int):
       if file is not None and file.invalid:
         os.unlink(file.path)
 
+  validate_hash = False
   data_choice = [None, None]
   if req.files and 'content' in req.files:
     is_download = True
     data_choice[0] = req.files['content'].read()
   else:
     data = req.get_json(force=True)
+
     if 'url' in data:
       is_download = True
       data_choice[0] = requests.get(data['url']).text
     else:
       data_choice[1] = data['map_id']
+
+    if 'map_hash' in data:
+      validate_hash = data['map_hash']
 
   query_mods = []
   mod_names, mod_flags = mods.in_request()
@@ -124,6 +129,11 @@ def fetch_difficulty_generic(mode_id: int):
     output = json.loads(raw_output.splitlines()[-1])
 
   raw_stat = next(iter(output['results']), None)
+
+  if raw_stat is not None and validate_hash and \
+     raw_stat.get('map_hash', validate_hash) != validate_hash:
+    raw_stat = None
+
   map_stat_rating = {}
   if raw_stat is not None and mode_id == raw_stat['ruleset_id']:
     map_stat_rating["map_id"] = raw_stat['beatmap_id']
