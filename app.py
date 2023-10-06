@@ -88,7 +88,7 @@ def fetch_difficulty_generic(mode_id: int):
     if 'url' in data:
       is_download = True
       data_choice[0] = requests.get(data['url']).text
-    else:
+    elif 'map_id' in data and (isinstance(data['map_id'], int) or data['map_id'].isdigit()):
       data_choice[1] = data['map_id']
 
     if 'map_hash' in data:
@@ -101,6 +101,8 @@ def fetch_difficulty_generic(mode_id: int):
   elif mod_flags is not None:
     query_mods[:] = mods.convert_classic_to_community(mod_flags)
 
+  output_hash = None
+
   with downloaded_file(data_choice[0]) as dl:
     cmd = ['dotnet', 'PerformanceCalculator.dll', 'metadata', '-j']
     # cmd.append('--no-classic')
@@ -109,6 +111,7 @@ def fetch_difficulty_generic(mode_id: int):
       cmd.extend(['-m', mod])
 
     if dl:
+      output_hash = dl.hash
       cmd.append(os.path.join(os.getcwd(), dl.path))
     else:
       cmd.append(data_choice[1])
@@ -123,12 +126,21 @@ def fetch_difficulty_generic(mode_id: int):
       text=True,
     )
 
+    if not dl:
+      map_file = os.path.join('tmp', 'cache', f'{data_choice[1]}.osu')
+      map_content = open(map_file, 'rb').read()
+      if not map_content:
+        os.unlink(map_file)
+      output_hash = hashlib.md5(map_content).hexdigest()
+
     if proc.returncode:
       raise OsuProcessException(next((line for line in proc.stderr.splitlines()), None))
     raw_output = proc if isinstance(proc, str) else proc.stdout
     output = json.loads(raw_output.splitlines()[-1])
 
   raw_stat = next(iter(output['results']), None)
+  if raw_stat is not None:
+    raw_stat['map_hash'] = output_hash
 
   if raw_stat is not None and validate_hash and \
      raw_stat.get('map_hash', validate_hash) != validate_hash:
